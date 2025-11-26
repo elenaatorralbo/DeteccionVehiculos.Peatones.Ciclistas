@@ -15,6 +15,8 @@ from feature_extraction import run_feature_extraction
 # --- CONFIGURACIÓN ---
 BASE_IMAGE_DIR = 'data_object_image_2/training/image_2/'
 K_VALUE = 5  # Valor para el modelo KNN
+# NUEVA CONFIGURACIÓN: Mapeo de IDs numéricos a nombres de clase para 4 objetos
+CLASS_ID_TO_NAME = {0: 'Car', 1: 'Truck', 2: 'Pedestrian', 3: 'Cyclist'}
 
 
 # =========================================================================
@@ -57,16 +59,14 @@ def classify_single_object(cropped_img, scaler, knn_model):
     # 4. Predicción
     prediction = knn_model.predict(single_scaled_feature)[0]
 
-    # 5. Interpretación (0=Car, 1=Truck)
-    predicted_class = 'Truck' if prediction == 1 else 'Car'
+    # 5. Interpretación (MODIFICACIÓN: Mapeo a 4 clases)
+    predicted_class = CLASS_ID_TO_NAME.get(prediction, "N/A")
     return predicted_class
 
 
 # =========================================================================
 # FUNCIÓN DE CLASIFICACIÓN Y ENTRENAMIENTO (FASE 4)
 # =========================================================================
-
-# Elimina la importación: from sklearn.utils.class_weight import compute_class_weight
 
 def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
     print("\n=======================================================")
@@ -94,12 +94,13 @@ def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
 
     # 2. AGRUPAMIENTO NO SUPERVISADO: K-MEANS
     start_kmeans = time.time()
-    kmeans_model = KMeans(n_clusters=2, random_state=42, n_init=10)
+    # MODIFICACIÓN: n_clusters cambiado a 4 para las 4 clases
+    kmeans_model = KMeans(n_clusters=4, random_state=42, n_init=10)
     kmeans_model.fit(X_train)
     Y_pred_kmeans = kmeans_model.predict(X_test)
     elapsed_kmeans = time.time() - start_kmeans
 
-    print(f"\n--- K-MEANS (K=2) ---")
+    print(f"\n--- K-MEANS (K=4) ---")
     print(f"Tiempo de entrenamiento y predicción: {elapsed_kmeans:.4f} segundos.")
 
     # GENERACIÓN DE RESULTADOS
@@ -110,15 +111,17 @@ def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
         'Image_Data': test_data_visual
     })
 
-    results_df['GT_Class'] = results_df['Ground_Truth'].apply(lambda x: 'Truck' if x == 1 else 'Car')
-    results_df['KNN_Class'] = results_df['Pred_KNN'].apply(lambda x: 'Truck' if x == 1 else 'Car')
+    # MODIFICACIÓN: Uso del mapeo CLASS_ID_TO_NAME para los resultados
+    map_to_class_name = lambda x: CLASS_ID_TO_NAME.get(x, 'Desconocido')
+
+    results_df['GT_Class'] = results_df['Ground_Truth'].apply(map_to_class_name)
+    results_df['KNN_Class'] = results_df['Pred_KNN'].apply(map_to_class_name)
     results_df['KMeans_Cluster'] = results_df['Pred_KMeans'].apply(lambda x: f'Cluster {x}')
 
     print("\n--- RESULTADOS (Primeras 10 predicciones) ---")
     print(results_df[['GT_Class', 'KNN_Class', 'KMeans_Cluster']].head(10))
 
     return results_df, knn_model
-
 
 
 # =========================================================================
@@ -221,7 +224,7 @@ if __name__ == '__main__':
         # 4. INSPECCIÓN VISUAL
 
         # A. Inspección de Recortes (Muestra solo el objeto detectado)
-        #inspect_predictions(results_df, num_samples=5)
+        # inspect_predictions(results_df, num_samples=5)
 
         # B. Visualización de Imagen Completa (Muestra la imagen original con el BBox)
         run_realtime_detection(knn_model, scaler, results_df, num_samples=40)

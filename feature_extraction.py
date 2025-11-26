@@ -16,6 +16,7 @@ except AttributeError:
 def extract_features(cropped_data, set_name):
     """
     Calcula un vector de características (features) para cada vehículo recortado.
+    Se actualiza el etiquetado para incluir Car (0), Truck (1), Pedestrian (2), y Cyclist (3).
     """
 
     X_features = []
@@ -43,7 +44,20 @@ def extract_features(cropped_data, set_name):
         feature_vector = [aspect_ratio, h_avg, s_avg, v_avg, num_keypoints]
 
         X_features.append(feature_vector)
-        Y_labels.append(0 if obj_class == 'Car' else 1)
+
+        # MODIFICACIÓN: Etiquetado Multiclase (Car=0, Truck=1, Pedestrian=2, Cyclist=3)
+        if obj_class == 'Car':
+            label = 0
+        elif obj_class == 'Truck':
+            label = 1
+        elif obj_class == 'Pedestrian':
+            label = 2
+        elif obj_class == 'Cyclist':
+            label = 3
+        else:
+            continue
+
+        Y_labels.append(label)
 
     return np.array(X_features), np.array(Y_labels), cropped_data
 
@@ -55,6 +69,7 @@ def normalize_features(X_train, X_test):
     X_test_scaled = scaler.transform(X_test)
 
     return X_train_scaled, X_test_scaled, scaler
+
 
 # --- FUNCIÓN PRINCIPAL PARA IMPORTAR ---
 def run_feature_extraction(train_set, test_set):
