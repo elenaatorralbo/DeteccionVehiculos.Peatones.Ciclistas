@@ -10,11 +10,14 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.utils.class_weight import compute_class_weight
 from skimage.feature import hog
+# --- NUEVA IMPORTACIÓN PARA SMOTE ---
+from imblearn.over_sampling import SMOTE
+# -----------------------------------
 
 # IMPORTAMOS LAS FASES ANTERIORES
-# Importamos la nueva fase 3 y la configuración HOG_IMAGE_SIZE
 from preprocess import run_preprocessing
-from feature_extraction_v2 import run_feature_extraction, HOG_IMAGE_SIZE
+# Importamos la NUEVA fase 3 y la función de histograma
+from feature_extraction_v3 import run_feature_extraction, HOG_IMAGE_SIZE, calculate_hsv_histogram
 
 # --- CONFIGURACIÓN ---
 BASE_IMAGE_DIR = 'data_object_image_2/training/image_2/'
@@ -22,7 +25,7 @@ CLASS_ID_TO_NAME = {0: 'Car', 1: 'Truck', 2: 'Pedestrian', 3: 'Cyclist'}
 
 
 # =========================================================================
-# UTILITY: Función para guardar métricas (REUTILIZADA)
+# UTILITY: Función para guardar métricas
 # =========================================================================
 
 def save_metrics_to_file(model_name, accuracy, report):
@@ -37,11 +40,11 @@ def save_metrics_to_file(model_name, accuracy, report):
 
 
 # =========================================================================
-# UTILITY: Función para clasificar un objeto individual (HOG+PCA)
+# UTILITY: Función para clasificar un objeto individual (HOG+HSV Hist+PCA)
 # =========================================================================
 
 def classify_single_object(cropped_img, scaler, pca_model, svc_model):
-    """Extrae features (HOG incluido), normaliza, aplica PCA y clasifica con SVC."""
+    """Extrae features (HOG, HSV Hist incluido), normaliza, aplica PCA y clasifica con SVC."""
 
     h, w = cropped_img.shape[:2]
     aspect_ratio = w / h
@@ -50,17 +53,13 @@ def classify_single_object(cropped_img, scaler, pca_model, svc_model):
 
     # --- HOG: Redimensionamiento y escala de grises ---
     try:
-        resized_img = cv2.resize(cropped_img, HOG_IMAGE_SIZE)
-        gray_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2GRAY)
-        img_hsv = cv2.cvtColor(cropped_img, cv2.COLOR_BGR2HSV)
+        resized_img_hog = cv2.resize(cropped_img, HOG_IMAGE_SIZE)
+        gray_img = cv2.cvtColor(resized_img_hog, cv2.COLOR_BGR2GRAY)
     except cv2.error:
         return "N/A"
     # --------------------------------------------------
 
-    h_avg = np.mean(img_hsv[:, :, 0])
-    s_avg = np.mean(img_hsv[:, :, 1])
-    v_avg = np.mean(img_hsv[:, :, 2])
-
+    # 1. Descriptores de Textura/Patrón (Número de KeyPoints)
     try:
         detector = cv2.SIFT_create(nfeatures=500)
     except AttributeError:
@@ -74,20 +73,23 @@ def classify_single_object(cropped_img, scaler, pca_model, svc_model):
                        cells_per_block=(2, 2), block_norm='L2-Hys',
                        visualize=False, feature_vector=True)
 
-    # 3. Vector de Features (Base + HOG)
-    base_features = np.array([aspect_ratio, h_avg, s_avg, v_avg, num_keypoints])
-    single_feature_vector = np.concatenate((base_features, hog_features)).reshape(1, -1)
+    # 3. Histograma de Color (NUEVO)
+    hsv_hist_features = calculate_hsv_histogram(cropped_img)
 
-    # 4. Normalización
+    # 4. Vector de Features (Base + HOG + Hist)
+    base_features = np.array([aspect_ratio, num_keypoints])
+    single_feature_vector = np.concatenate((base_features, hog_features, hsv_hist_features)).reshape(1, -1)
+
+    # 5. Normalización
     single_scaled_feature = scaler.transform(single_feature_vector)
 
-    # 5. Aplicar PCA
+    # 6. Aplicar PCA
     single_pca_feature = pca_model.transform(single_scaled_feature)
 
-    # 6. Predicción con SVC
+    # 7. Predicción con SVC
     prediction = svc_model.predict(single_pca_feature)[0]
 
-    # 7. Interpretación
+    # 8. Interpretación
     predicted_class = CLASS_ID_TO_NAME.get(prediction, "N/A")
     return predicted_class
 
@@ -96,22 +98,37 @@ def classify_single_object(cropped_img, scaler, pca_model, svc_model):
 # FUNCIÓN DE CLASIFICACIÓN Y ENTRENAMIENTO (FASE 4)
 # =========================================================================
 
-def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
+def classify_vehicles(X_train_pca, Y_train, X_test_pca, Y_test, test_data_visual):
     print("\n=======================================================")
-    print("FASE 4: CLASIFICACIÓN Y PREDICCIÓN (SVC + PCA)")
+    print("FASE 4: CLASIFICACIÓN Y PREDICCIÓN (SVC + SMOTE)")
     print("=======================================================")
+
+    # --- PASO CRÍTICO: SOBREMUESTREO CON SMOTE ---
+    start_smote = time.time()
+    print("Aplicando SMOTE para balancear las clases en el conjunto de entrenamiento...")
+
+    # SMOTE solo se aplica a los datos de entrenamiento para generar muestras sintéticas
+    sm = SMOTE(random_state=42)
+    X_train_res, Y_train_res = sm.fit_resample(X_train_pca, Y_train)
+
+    elapsed_smote = time.time() - start_smote
+    print(f"SMOTE completado en {elapsed_smote:.2f} segundos.")
+    print(f"X_train original shape: {X_train_pca.shape} -> X_train resampled shape: {X_train_res.shape}")
+    # ---------------------------------------------
 
     # 1. CLASIFICACIÓN SUPERVISADA: SVC
     start_svc = time.time()
 
-    C_VALUE = 1
-    # Usamos SVC con kernel RBF y class_weight='balanced'
-    svc_model = SVC(kernel='rbf', class_weight='balanced', random_state=42,C=C_VALUE )
-    svc_model.fit(X_train, Y_train)
-    Y_pred_svc = svc_model.predict(X_test)
+    # IMPORTANTE: Eliminamos class_weight='balanced' porque los datos ya están balanceados con SMOTE
+    svc_model = SVC(kernel='rbf', random_state=42)
+
+    # Entrenar el modelo con las características BALANCEADAS
+    svc_model.fit(X_train_res, Y_train_res)
+
+    Y_pred_svc = svc_model.predict(X_test_pca)
     elapsed_svc = time.time() - start_svc
 
-    print(f"\n--- SVC (kernel='rbf', class_weight='balanced') ---")
+    print(f"\n--- SVC (kernel='rbf') ---")
     print(f"Tiempo de entrenamiento y predicción: {elapsed_svc:.4f} segundos.")
 
     # --- CÁLCULO DE MÉTRICAS DE RENDIMIENTO ---
@@ -120,18 +137,19 @@ def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
     svc_report = classification_report(Y_test, Y_pred_svc, target_names=target_names)
 
     print(f"\nPrecisión General (Accuracy): {svc_accuracy:.4f} ({svc_accuracy * 100:.2f}%)")
-    print("\nReporte de Clasificación (SVC - Precisión, Recall, F1-Score):")
+    print("\nReporte de Clasificación (SVC + SMOTE - Precisión, Recall, F1-Score):")
     print(svc_report)
 
-    # GUARDAR MÉTRICAS (NUEVO)
-    save_metrics_to_file("svc_pca", svc_accuracy, svc_report)
+    # GUARDAR MÉTRICAS
+    save_metrics_to_file("svc_smote", svc_accuracy, svc_report)
     # ----------------------------------------
 
     # 2. AGRUPAMIENTO NO SUPERVISADO: K-MEANS
     start_kmeans = time.time()
+    # K-Means sigue usando los datos con PCA (no resampleados)
     kmeans_model = KMeans(n_clusters=4, random_state=42, n_init=10)
-    kmeans_model.fit(X_train)
-    Y_pred_kmeans = kmeans_model.predict(X_test)
+    kmeans_model.fit(X_train_pca)
+    Y_pred_kmeans = kmeans_model.predict(X_test_pca)
     elapsed_kmeans = time.time() - start_kmeans
 
     print(f"\n--- K-MEANS (K=4 sobre datos PCA) ---")
@@ -187,8 +205,7 @@ def inspect_predictions(results_df, num_samples=5):
 
 def run_realtime_detection(svc_model, scaler, pca_model, results_df, num_samples=5):
     """
-    Usa los Bounding Boxes (BBox) del Ground Truth para simular la detección
-    y clasifica cada región con el modelo SVC + PCA, dibujando el recuadro en la imagen completa.
+    Usa los Bounding Boxes (BBox) del GT para clasificar cada región con SVC + SMOTE.
     """
 
     print("\n--- INICIO DE LA INSPECCIÓN VISUAL EN IMÁGENES COMPLETAS ---")
@@ -212,7 +229,7 @@ def run_realtime_detection(svc_model, scaler, pca_model, results_df, num_samples
         xmin, ymin, xmax, ymax = map(int, bbox_float)
         detected_roi = img[ymin:ymax, xmin:xmax]
 
-        # Clasificar la región usando el modelo SVC y PCA
+        # Clasificar la región usando el modelo SVC y PCA (con lógica de features actualizada)
         predicted_class = classify_single_object(detected_roi, scaler, pca_model, svc_model)
 
         gt_class = row['GT_Class']
@@ -237,12 +254,12 @@ if __name__ == '__main__':
     train_set, test_set = run_preprocessing()
 
     if train_set and test_set:
-        # 2. FASE 3: Extracción, Normalización y PCA (Retorna el objeto PCA)
+        # 2. FASE 3: Extracción (HOG + Histograma HSV), Normalización y PCA
         X_train_pca, Y_train, X_test_pca, Y_test, test_data_visual, scaler, pca = run_feature_extraction(train_set,
                                                                                                          test_set)
 
-        # 3. FASE 4: Clasificación y Obtención de Resultados con SVC
+        # 3. FASE 4: Clasificación y Obtención de Resultados con SVC + SMOTE
         results_df, svc_model = classify_vehicles(X_train_pca, Y_train, X_test_pca, Y_test, test_data_visual)
 
         # 4. INSPECCIÓN VISUAL
-        run_realtime_detection(svc_model, scaler, pca, results_df, num_samples=10)
+        run_realtime_detection(svc_model, scaler, pca, results_df, num_samples=40)

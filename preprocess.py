@@ -12,7 +12,7 @@ BASE_LABEL_DIR = 'data_object_label_2/training/label_2'
 TARGET_CLASSES = ['Car', 'Truck', 'Pedestrian', 'Cyclist']
 
 # Parámetros para reducir el dataset y dividirlo
-DATA_USAGE_RATIO = 0.20  # Usar solo el 10% de las imágenes únicas para evitar desbordamiento de memoria.
+DATA_USAGE_RATIO = 0.70
 TEST_SIZE = 0.20
 RANDOM_SEED = 42
 

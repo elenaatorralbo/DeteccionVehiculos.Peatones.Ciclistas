@@ -7,9 +7,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
-# --- NUEVA IMPORTACIÓN PARA MÉTRICAS ---
 from sklearn.metrics import accuracy_score, classification_report
-# --------------------------------------
 
 # IMPORTAMOS LAS FASES ANTERIORES
 from preprocess import run_preprocessing
@@ -20,6 +18,21 @@ BASE_IMAGE_DIR = 'data_object_image_2/training/image_2/'
 K_VALUE = 5  # Valor para el modelo KNN
 # NUEVA CONFIGURACIÓN: Mapeo de IDs numéricos a nombres de clase para 4 objetos
 CLASS_ID_TO_NAME = {0: 'Car', 1: 'Truck', 2: 'Pedestrian', 3: 'Cyclist'}
+
+
+# =========================================================================
+# UTILITY: Función para guardar métricas (NUEVA)
+# =========================================================================
+
+def save_metrics_to_file(model_name, accuracy, report):
+    """Guarda el reporte de clasificación en un archivo .txt."""
+    filename = f"metrics_{model_name}.txt"
+    with open(filename, 'w') as f:
+        f.write(f"--- REPORTE DE CLASIFICACIÓN: {model_name} ---\n\n")
+        f.write(f"Precisión General (Accuracy): {accuracy:.4f}\n\n")
+        f.write("Reporte Detallado:\n")
+        f.write(report)
+    print(f"\n✅ Métricas de {model_name} guardadas en {filename}")
 
 
 # =========================================================================
@@ -81,35 +94,29 @@ def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
 
     # 1. CLASIFICACIÓN SUPERVISADA: KNN
     start_knn = time.time()
-
-    # SOLUCIÓN: Usamos weights='distance'. Esto prioriza los vecinos más cercanos,
-    # lo cual ayuda a mitigar el desbalance sin usar el argumento 'sample_weight' no soportado.
     knn_model = KNeighborsClassifier(n_neighbors=K_VALUE, weights='distance')
-
-    # Entrenar el modelo
     knn_model.fit(X_train, Y_train)
-
     Y_pred_knn = knn_model.predict(X_test)
     elapsed_knn = time.time() - start_knn
 
     print(f"\n--- KNN (K={K_VALUE}, weights='distance') ---")
     print(f"Tiempo de entrenamiento y predicción: {elapsed_knn:.4f} segundos.")
 
-    # --- CÁLCULO DE MÉTRICAS DE RENDIMIENTO (NUEVO) ---
+    # --- CÁLCULO DE MÉTRICAS DE RENDIMIENTO ---
     knn_accuracy = accuracy_score(Y_test, Y_pred_knn)
-    print(f"\nPrecisión General (Accuracy): {knn_accuracy:.4f} ({knn_accuracy*100:.2f}%)")
-
-    # Muestra métricas detalladas por clase
     target_names = list(CLASS_ID_TO_NAME.values())
-    print("\nReporte de Clasificación (KNN - Precisión, Recall, F1-Score):")
-    # Generamos el reporte usando las etiquetas mapeadas (Car, Truck, etc.)
-    print(classification_report(Y_test, Y_pred_knn, target_names=target_names))
-    # -------------------------------------------------
+    knn_report = classification_report(Y_test, Y_pred_knn, target_names=target_names)
 
+    print(f"\nPrecisión General (Accuracy): {knn_accuracy:.4f} ({knn_accuracy * 100:.2f}%)")
+    print("\nReporte de Clasificación (KNN - Precisión, Recall, F1-Score):")
+    print(knn_report)
+
+    # GUARDAR MÉTRICAS (NUEVO)
+    save_metrics_to_file("knn", knn_accuracy, knn_report)
+    # ----------------------------------------
 
     # 2. AGRUPAMIENTO NO SUPERVISADO: K-MEANS
     start_kmeans = time.time()
-    # MODIFICACIÓN: n_clusters cambiado a 4 para las 4 clases
     kmeans_model = KMeans(n_clusters=4, random_state=42, n_init=10)
     kmeans_model.fit(X_train)
     Y_pred_kmeans = kmeans_model.predict(X_test)
@@ -117,9 +124,6 @@ def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
 
     print(f"\n--- K-MEANS (K=4) ---")
     print(f"Tiempo de entrenamiento y predicción: {elapsed_kmeans:.4f} segundos.")
-    # NOTA: Para K-Means, la 'precisión' directa no es significativa ya que los IDs de clústeres (0, 1, 2, 3)
-    # no coinciden automáticamente con los IDs de clase (0, 1, 2, 3).
-    # Solo mostramos el tiempo para el agrupamiento no supervisado.
 
     # GENERACIÓN DE RESULTADOS
     results_df = pd.DataFrame({
@@ -143,7 +147,7 @@ def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
 
 
 # =========================================================================
-# FUNCIONES DE VISUALIZACIÓN REFORZADAS (SIN CAMBIOS)
+# FUNCIONES DE VISUALIZACIÓN REFORZADAS
 # =========================================================================
 
 def inspect_predictions(results_df, num_samples=5):
@@ -240,9 +244,4 @@ if __name__ == '__main__':
         results_df, knn_model = classify_vehicles(X_train_scaled, Y_train, X_test_scaled, Y_test, test_data_visual)
 
         # 4. INSPECCIÓN VISUAL
-
-        # A. Inspección de Recortes (Muestra solo el objeto detectado)
-        # inspect_predictions(results_df, num_samples=5)
-
-        # B. Visualización de Imagen Completa (Muestra la imagen original con el BBox)
-        run_realtime_detection(knn_model, scaler, results_df, num_samples=40)
+        run_realtime_detection(knn_model, scaler, results_df, num_samples=10)

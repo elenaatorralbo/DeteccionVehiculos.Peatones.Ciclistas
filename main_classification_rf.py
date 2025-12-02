@@ -3,17 +3,20 @@ import numpy as np
 import pandas as pd
 import time
 import os
-from sklearn.svm import SVC
+# --- CAMBIO IMPORTANTE: Usamos RandomForestClassifier ---
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+# --- MÉTRICAS ---
 from sklearn.metrics import accuracy_score, classification_report
+# -----------------
 from sklearn.utils.class_weight import compute_class_weight
 from skimage.feature import hog
 
 # IMPORTAMOS LAS FASES ANTERIORES
-# Importamos la nueva fase 3 y la configuración HOG_IMAGE_SIZE
 from preprocess import run_preprocessing
+# Usamos la fase 3 que incluye HOG y PCA
 from feature_extraction_v2 import run_feature_extraction, HOG_IMAGE_SIZE
 
 # --- CONFIGURACIÓN ---
@@ -22,7 +25,7 @@ CLASS_ID_TO_NAME = {0: 'Car', 1: 'Truck', 2: 'Pedestrian', 3: 'Cyclist'}
 
 
 # =========================================================================
-# UTILITY: Función para guardar métricas (REUTILIZADA)
+# UTILITY: Función para guardar métricas
 # =========================================================================
 
 def save_metrics_to_file(model_name, accuracy, report):
@@ -38,10 +41,11 @@ def save_metrics_to_file(model_name, accuracy, report):
 
 # =========================================================================
 # UTILITY: Función para clasificar un objeto individual (HOG+PCA)
+# Ahora acepta el modelo RF
 # =========================================================================
 
-def classify_single_object(cropped_img, scaler, pca_model, svc_model):
-    """Extrae features (HOG incluido), normaliza, aplica PCA y clasifica con SVC."""
+def classify_single_object(cropped_img, scaler, pca_model, rf_model):
+    """Extrae features (HOG incluido), normaliza, aplica PCA y clasifica con Random Forest."""
 
     h, w = cropped_img.shape[:2]
     aspect_ratio = w / h
@@ -84,8 +88,8 @@ def classify_single_object(cropped_img, scaler, pca_model, svc_model):
     # 5. Aplicar PCA
     single_pca_feature = pca_model.transform(single_scaled_feature)
 
-    # 6. Predicción con SVC
-    prediction = svc_model.predict(single_pca_feature)[0]
+    # 6. Predicción con RF
+    prediction = rf_model.predict(single_pca_feature)[0]
 
     # 7. Interpretación
     predicted_class = CLASS_ID_TO_NAME.get(prediction, "N/A")
@@ -98,33 +102,35 @@ def classify_single_object(cropped_img, scaler, pca_model, svc_model):
 
 def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
     print("\n=======================================================")
-    print("FASE 4: CLASIFICACIÓN Y PREDICCIÓN (SVC + PCA)")
+    print("FASE 4: CLASIFICACIÓN Y PREDICCIÓN (Random Forest + PCA)")
     print("=======================================================")
 
-    # 1. CLASIFICACIÓN SUPERVISADA: SVC
-    start_svc = time.time()
+    # 1. CLASIFICACIÓN SUPERVISADA: RANDOM FOREST
+    start_rf = time.time()
 
-    C_VALUE = 1
-    # Usamos SVC con kernel RBF y class_weight='balanced'
-    svc_model = SVC(kernel='rbf', class_weight='balanced', random_state=42,C=C_VALUE )
-    svc_model.fit(X_train, Y_train)
-    Y_pred_svc = svc_model.predict(X_test)
-    elapsed_svc = time.time() - start_svc
+    # Usamos Random Forest con 100 estimadores y class_weight='balanced'
+    rf_model = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)
 
-    print(f"\n--- SVC (kernel='rbf', class_weight='balanced') ---")
-    print(f"Tiempo de entrenamiento y predicción: {elapsed_svc:.4f} segundos.")
+    # Entrenar el modelo con las características reducidas por PCA
+    rf_model.fit(X_train, Y_train)
+
+    Y_pred_rf = rf_model.predict(X_test)
+    elapsed_rf = time.time() - start_rf
+
+    print(f"\n--- Random Forest (n_estimators=100, class_weight='balanced') ---")
+    print(f"Tiempo de entrenamiento y predicción: {elapsed_rf:.4f} segundos.")
 
     # --- CÁLCULO DE MÉTRICAS DE RENDIMIENTO ---
-    svc_accuracy = accuracy_score(Y_test, Y_pred_svc)
+    rf_accuracy = accuracy_score(Y_test, Y_pred_rf)
     target_names = list(CLASS_ID_TO_NAME.values())
-    svc_report = classification_report(Y_test, Y_pred_svc, target_names=target_names)
+    rf_report = classification_report(Y_test, Y_pred_rf, target_names=target_names)
 
-    print(f"\nPrecisión General (Accuracy): {svc_accuracy:.4f} ({svc_accuracy * 100:.2f}%)")
-    print("\nReporte de Clasificación (SVC - Precisión, Recall, F1-Score):")
-    print(svc_report)
+    print(f"\nPrecisión General (Accuracy): {rf_accuracy:.4f} ({rf_accuracy * 100:.2f}%)")
+    print("\nReporte de Clasificación (Random Forest - Precisión, Recall, F1-Score):")
+    print(rf_report)
 
-    # GUARDAR MÉTRICAS (NUEVO)
-    save_metrics_to_file("svc_pca", svc_accuracy, svc_report)
+    # GUARDAR MÉTRICAS
+    save_metrics_to_file("random_forest", rf_accuracy, rf_report)
     # ----------------------------------------
 
     # 2. AGRUPAMIENTO NO SUPERVISADO: K-MEANS
@@ -140,7 +146,7 @@ def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
     # GENERACIÓN DE RESULTADOS
     results_df = pd.DataFrame({
         'Ground_Truth': Y_test,
-        'Pred_SVC': Y_pred_svc,
+        'Pred_RF': Y_pred_rf,  # CAMBIO: Pred_RF
         'Pred_KMeans': Y_pred_kmeans,
         'Image_Data': test_data_visual
     })
@@ -148,19 +154,20 @@ def classify_vehicles(X_train, Y_train, X_test, Y_test, test_data_visual):
     map_to_class_name = lambda x: CLASS_ID_TO_NAME.get(x, 'Desconocido')
 
     results_df['GT_Class'] = results_df['Ground_Truth'].apply(map_to_class_name)
-    results_df['SVC_Class'] = results_df['Pred_SVC'].apply(map_to_class_name)
+    results_df['RF_Class'] = results_df['Pred_RF'].apply(map_to_class_name)  # CAMBIO: RF_Class
     results_df['KMeans_Cluster'] = results_df['Pred_KMeans'].apply(lambda x: f'Cluster {x}')
 
     print("\n--- RESULTADOS (Primeras 10 predicciones) ---")
-    print(results_df[['GT_Class', 'SVC_Class', 'KMeans_Cluster']].head(10))
+    print(results_df[['GT_Class', 'RF_Class', 'KMeans_Cluster']].head(10))
 
-    return results_df, svc_model
+    return results_df, rf_model
 
 
 # =========================================================================
 # FUNCIONES DE VISUALIZACIÓN REFORZADAS
 # =========================================================================
 
+# Las funciones de visualización ahora usan el modelo RF
 def inspect_predictions(results_df, num_samples=5):
     """Muestra visualmente algunas predicciones (solo recortes) del Test Set."""
 
@@ -174,7 +181,7 @@ def inspect_predictions(results_df, num_samples=5):
 
         img = row['Image_Data']['image']
         gt = row['GT_Class']
-        pred = row['SVC_Class']
+        pred = row['RF_Class']  # CAMBIO
 
         color = (0, 255, 0) if (pred == gt) else (0, 0, 255)
         text_label = f"RECORTES PRED: {pred} (GT: {gt})"
@@ -185,10 +192,10 @@ def inspect_predictions(results_df, num_samples=5):
     cv2.destroyAllWindows()
 
 
-def run_realtime_detection(svc_model, scaler, pca_model, results_df, num_samples=5):
+def run_realtime_detection(rf_model, scaler, pca_model, results_df, num_samples=5):
     """
     Usa los Bounding Boxes (BBox) del Ground Truth para simular la detección
-    y clasifica cada región con el modelo SVC + PCA, dibujando el recuadro en la imagen completa.
+    y clasifica cada región con el modelo Random Forest + PCA, dibujando el recuadro en la imagen completa.
     """
 
     print("\n--- INICIO DE LA INSPECCIÓN VISUAL EN IMÁGENES COMPLETAS ---")
@@ -212,8 +219,8 @@ def run_realtime_detection(svc_model, scaler, pca_model, results_df, num_samples
         xmin, ymin, xmax, ymax = map(int, bbox_float)
         detected_roi = img[ymin:ymax, xmin:xmax]
 
-        # Clasificar la región usando el modelo SVC y PCA
-        predicted_class = classify_single_object(detected_roi, scaler, pca_model, svc_model)
+        # Clasificar la región usando el modelo RF y PCA
+        predicted_class = classify_single_object(detected_roi, scaler, pca_model, rf_model)
 
         gt_class = row['GT_Class']
 
@@ -238,11 +245,12 @@ if __name__ == '__main__':
 
     if train_set and test_set:
         # 2. FASE 3: Extracción, Normalización y PCA (Retorna el objeto PCA)
+        # Asegúrate de usar feature_extraction_v2.py que incluye HOG y PCA
         X_train_pca, Y_train, X_test_pca, Y_test, test_data_visual, scaler, pca = run_feature_extraction(train_set,
                                                                                                          test_set)
 
-        # 3. FASE 4: Clasificación y Obtención de Resultados con SVC
-        results_df, svc_model = classify_vehicles(X_train_pca, Y_train, X_test_pca, Y_test, test_data_visual)
+        # 3. FASE 4: Clasificación y Obtención de Resultados con Random Forest
+        results_df, rf_model = classify_vehicles(X_train_pca, Y_train, X_test_pca, Y_test, test_data_visual)
 
         # 4. INSPECCIÓN VISUAL
-        run_realtime_detection(svc_model, scaler, pca, results_df, num_samples=10)
+        run_realtime_detection(rf_model, scaler, pca, results_df, num_samples=40)
